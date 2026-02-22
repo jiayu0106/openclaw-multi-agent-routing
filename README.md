@@ -1,114 +1,105 @@
-# multi-agent-routing (OpenClaw Skill)
+# multi-agent-routing (Skill)
 
-This skill documents **Multi-Agent Routing** for OpenClaw:
+Configure OpenClaw **multi-agent routing** as **Pattern B**:
+- **DMs / private chats** → handled by the main agent (usually `main`)
+- **Groups / guilds / teams** → each group is bound to a dedicated agent (isolated workspace, optional custom model)
 
-- **DMs** → handled by the **main** agent (shared session)
-- **Group chats** → each group/guild routes to a **dedicated agent** (isolated workspace, optional custom model)
+> For the full guide and more examples, see: `SKILL.md`
 
-It’s intended for setups where you want strict isolation between group conversations (different memory, tools, and even different models).
+## When to use
+
+- You want **per-group isolation** (separate context and workspace per team/project)
+- One bot serves many groups, but you want them **not to affect each other**
+- You need deterministic routing in channels like Feishu / Discord / Telegram groups
 
 ## Supported channels (v1)
 
-| Channel | Group ID format | Binding key |
+| Channel | Group ID format | Binding match key |
 | --- | --- | --- |
-| Feishu | `oc_xxx` (`chat_id`) | `match.peer.kind: "group"`, `match.peer.id` |
-| Discord | Guild ID (numeric string) | `match.guildId` |
+| Feishu | `oc_xxx` (chat_id) | `peer.kind: "group"` + `peer.id` |
+| Telegram | group chat id (stringified number, often `-100...`) | `peer.kind: "group"` + `peer.id` |
+| Telegram (forum topic) | `<groupChatId>:topic:<topicId>` (e.g. `-100...:topic:99`) | `peer.kind: "group"` + `peer.id` (topic-aware) |
+| Discord | guild ID (numeric string) | `guildId` |
 
-## Where to put this skill
+## What you need to change in `openclaw.json` (3 places)
 
-OpenClaw loads skills from (highest precedence first):
+Pattern B requires updates in **three sections**:
 
-1. `<agent-workspace>/skills/<skill-name>`
-2. `~/.openclaw/skills/<skill-name>`
-3. Bundled skills
+1. **`agents.list`**: define agents (`id`, `workspace`, optional `model`)
+2. **`bindings`** (top-level array): bind a group/guild to an agent
+3. **`channels.<channel>`**: allow the group in (Feishu `groupPolicy/groupAllowFrom`, Telegram `channels.telegram.groups`, Discord `guilds`/policy)
 
-To use this as a workspace-only skill:
+## Quickstart (recommended flow)
+
+1. **Confirm these 5 inputs** (to avoid silent routing misses)
+   - Agent ID (recommended: `<channel>-<team>-<purpose>`)
+   - Workspace path (recommended: `/root/.openclaw/workspace-<channel>-<team>`)
+   - Model: use default, or pick an existing model already configured under `models.providers`
+   - Group/Guild ID to bind (Feishu `oc_...` / Discord guild id / Telegram chat id)
+   - Group access policy: allowlist (recommended) or open
+
+2. **Back up `openclaw.json`** (strongly recommended)
 
 ```bash
-mkdir -p ~/.openclaw/workspace/skills
-cp -R ./skills/multi-agent-routing ~/.openclaw/workspace/skills/multi-agent-routing
+cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak
 ```
 
-Then restart the gateway (or refresh skills) and verify:
+3. Apply config in order: `agents.list` → `bindings` → `channels.*`
+4. Validate JSON (a single missing comma can prevent the Gateway from starting)
+5. Restart the Gateway to load the new config
+6. Verify routing: DMs go to `main`, group messages go to the bound agent
 
-```bash
-openclaw skills list
-openclaw skills info multi-agent-routing
-openclaw skills check
-```
+## Minimal example (Feishu group → dedicated agent)
 
-## What Pattern B changes in `openclaw.json`
+> This snippet uses placeholders. Replace `chat_id`, paths, and agent IDs with your real values.
 
-Pattern B requires **three** coordinated changes:
-
-1. **`agents.list`** — define per-group agents (id/workspace/model)
-2. **`bindings`** — bind each group/guild to an agent
-3. **`channels.<channel>`** — allow the group to reach the bot (groupPolicy / allowlists)
-
-## Quickstart checklist
-
-1. **Pick an `agentId`** (unique, semantic)
-2. **Pick an isolated `workspace` path** for that agent
-3. **(Optional) Pick a custom model** that already exists in `models.providers`
-4. **Add a `bindings[]` entry** for the target group/guild
-5. **Ensure the channel access control allows the group**
-6. Restart gateway and verify routing in logs
-
-## Examples
-
-### Feishu: bind one group to a dedicated agent
-
-```json5
+```json
 {
-  agents: {
-    defaults: { workspace: "/root/.openclaw/workspace" },
-    list: [
-      { id: "main", default: true },
-      { id: "feishu-engineering", workspace: "/root/.openclaw/workspace-feishu-engineering" }
+  "agents": {
+    "defaults": {
+      "model": { "primary": "minimax/MiniMax-M2.1-lightning" },
+      "workspace": "/root/.openclaw/workspace"
+    },
+    "list": [
+      { "id": "main", "default": true },
+      {
+        "id": "feishu-engineering-team",
+        "workspace": "/root/.openclaw/workspace-feishu-engineering"
+      }
     ]
   },
-  bindings: [
+  "bindings": [
     {
-      agentId: "feishu-engineering",
-      match: { channel: "feishu", peer: { kind: "group", id: "oc_xxx" } }
+      "agentId": "feishu-engineering-team",
+      "match": {
+        "channel": "feishu",
+        "peer": { "kind": "group", "id": "oc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }
+      }
     }
   ],
-  channels: {
-    feishu: {
-      enabled: true,
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["oc_xxx"]
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": ["oc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
     }
   }
 }
 ```
 
-### Discord: bind one guild to a dedicated agent
+## Common pitfalls
 
-```json5
-{
-  agents: {
-    list: [
-      { id: "main", default: true },
-      { id: "discord-community", workspace: "/root/.openclaw/workspace-discord-community" }
-    ]
-  },
-  bindings: [
-    { agentId: "discord-community", match: { channel: "discord", guildId: "123456789012345678" } }
-  ]
-}
-```
+- **`bindings[].agentId` does not match any `agents.list[].id`**: the binding will never hit
+- **`model.primary` references a non-existent provider/model**: the Gateway may fail to start, or the agent won’t work
+  - Only reference models that already exist in `models.providers` as `<provider>/<modelId>`
+- **You forgot to allowlist the group in the channel config**: messages will be rejected (especially common on Feishu/Telegram)
 
-## Common pitfalls (important)
+## How to get IDs
 
-- **Routing is not access control**:
-  - `bindings` only decides *which agent* handles a message.
-  - The message can still be blocked earlier by channel policies like `channels.feishu.groupPolicy`.
+- **Feishu `chat_id` (`oc_...`)**: add the bot to the group → send a message → find `chatId` in gateway logs
+- **Discord guild ID**: enable Developer Mode → right-click server → Copy Server ID
+- **Telegram chat id**: read `chat.id` from incoming update/logs (often `-100...`)
 
-- **Feishu `groupAllowFrom` must contain group IDs (`oc_...`), not user IDs (`ou_...`)**:
-  - `groupAllowFrom` controls **which groups are allowed at all**.
-  - If you want to restrict *who* inside a group can trigger the bot, use:
-    - `channels.feishu.groups.<chat_id>.allowFrom: ["ou_xxx", ...]`
+## Further reading
 
-- **Mention gating**:
-  - Many channels default to “respond only when @mentioned”. If the bot is silent in groups, check `requireMention` (global or per-group).
+- `SKILL.md`: full guide, more channel examples, routing priority, and checklist
