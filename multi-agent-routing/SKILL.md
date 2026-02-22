@@ -13,6 +13,8 @@ Configure **Pattern B** routing: main agent handles all private messages (DMs); 
 | Channel | Group ID Format | Binding Key |
 |---------|----------------|-------------|
 | Feishu  | `oc_xxx` (chat_id) | `peer.kind: "group"`, `peer.id` |
+| Telegram | Group chat id (stringified number, often negative like `-100123...`) | `peer.kind: "group"`, `peer.id` |
+| Telegram (forum topic) | `<groupChatId>:topic:<topicId>` (example: `-1001234567890:topic:99`) | `peer.kind: "group"`, `peer.id` (topic-aware) |
 | Discord | Guild ID (numeric string) | `guildId` |
 
 ---
@@ -241,6 +243,56 @@ Add agents to `agents.list[]`. Each agent can have:
 - `peer.kind`: `"group"` for group chats, `"direct"` for DMs
 - `peer.id`: Feishu chat_id (starts with `oc_`)
 
+### Telegram Group Binding
+
+```json
+{
+  "bindings": [
+    {
+      "agentId": "telegram-community",
+      "match": {
+        "channel": "telegram",
+        "peer": { "kind": "group", "id": "-1001234567890" }
+      }
+    }
+  ]
+}
+```
+
+- `agentId`: Must match an agent's `id` in `agents.list[]`
+- `peer.kind`: Use `"group"` for Telegram groups/supergroups
+- `peer.id`: Telegram `chat.id` as a string (often a negative number like `-100...`)
+
+### Telegram Forum Topic Binding (optional)
+
+If the group is a forum (topics enabled), you can bind either:
+
+- **Whole group**: bind base group id (`-100...`) and let topics inherit via parent binding.
+- **A specific topic**: bind the topic-specific peer id (`-100...:topic:<topicId>`).
+
+```json
+{
+  "bindings": [
+    {
+      "agentId": "telegram-topic-99",
+      "match": {
+        "channel": "telegram",
+        "peer": { "kind": "group", "id": "-1001234567890:topic:99" }
+      }
+    },
+    {
+      "agentId": "telegram-community",
+      "match": {
+        "channel": "telegram",
+        "peer": { "kind": "group", "id": "-1001234567890" }
+      }
+    }
+  ]
+}
+```
+
+> Tip: Parent binding inheritance is supported for Telegram forum topics, so binding the base group id is usually enough unless you want per-topic isolation.
+
 ### Discord Guild Binding
 
 ```json
@@ -311,6 +363,28 @@ Add agents to `agents.list[]`. Each agent can have:
 
 - `groupPolicy`: `"allowlist"` (default, recommended) | `"open"` | `"disabled"`
 - `groupAllowFrom`: Array of allowed chat_ids (only when `groupPolicy: "allowlist"`)
+
+### Telegram Group Access
+
+Telegram uses `channels.telegram.groups` as the primary group allowlist + mention gating surface.
+
+- If you set `channels.telegram.groups`, it becomes an **allowlist** (only listed groups, or `"*"`, are accepted).
+- Use `requireMention` to control whether the bot replies only when mentioned.
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "groups": {
+        "-1001234567890": { "requireMention": true }
+      }
+    }
+  }
+}
+```
+
+(Forum topics inherit their parent group config unless you add per-topic overrides under `topics`.)
 
 ### Discord Guild Access
 
